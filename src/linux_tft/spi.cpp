@@ -1,41 +1,29 @@
-#include "spi_bus.h"
+#pragma GCC optimize("O3")
+#include "spi.h"
 
 #include <fcntl.h>
 #include <linux/spi/spidev.h>
 #include <sys/ioctl.h>
+#include <unistd.h>
 
-#include <cerrno>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
-#include "displ_add_line_ctrl.h"
-#include "thread_helper.h"
+#include "add_pins.h"
+#include "setup.h"
 
 #define SPI_CHUNK_SIZE 256
 #define SPI_TR_PACK_SIZE 10
 
-const char* STR_SPIDEV_PATH = "/dev/spidev1.1";
-const uint32_t SPI_MAX_SPEED = 50000000;
-const uint8_t SPI_MODE = SPI_MODE_0;
-const uint8_t SPI_BIT_PER_WORD = 8;
+static const uint32_t SPI_FREQ = SPI_FREQUENCY;
+static const uint32_t SPI_MODE = SPI_MODE_0;
+static const uint32_t SPI_BIT_PER_WORD = 8;
 
-#define ST7796_CASET 0x2A
-#define ST7796_RASET 0x2B
-#define ST7796_RAMWR 0x2C
-#define ST7796_RAMRD 0x2E
+static struct spi_ioc_transfer* _transfers = nullptr;
+static size_t _max_chunks_num = 0;
+static int spi_fd = -1;
 
-#define ST7796_INVOFF 0x20
-#define ST7796_INVON 0x21
-#define ST7796_DISPOFF 0x28
-#define ST7796_DISPON 0x29
-
-struct spi_ioc_transfer* _transfers = nullptr;
-size_t _max_chunks_num = 0;
-
-int spi_fd = -1;
-
-union
+static union
 {
   uint16_t value;
   struct
@@ -52,18 +40,11 @@ static union
   uint32_t* _buffer32;
 };
 
-uint16_t _data_buf_index = 0;
+static uint16_t _data_buf_index = 0;
 
-void DC_HIGH();
-void DC_LOW();
-void CS_HIGH();
-void CS_LOW();
 void POLL(uint32_t len);
 void flush_data_buf();
 void WRITE8BIT(uint8_t d);
-void writeCommand(uint8_t c);
-void beginWrite();
-void endWrite();
 
 #define MSB_16(val) (((val) & 0xFF00) >> 8) | (((val) & 0xFF) << 8)
 #define MSB_16_SET(var, val) \
@@ -84,27 +65,7 @@ void endWrite();
     (var) = ((uint32_t)a[0] << 8 | a[1] | a[2] << 24 | a[3] << 16); \
   }
 
-void DC_HIGH()
-{
-  set_disp_add_pin(PIN_DC, HIGH);
-}
-
-void DC_LOW()
-{
-  set_disp_add_pin(PIN_DC, LOW);
-}
-
-void CS_HIGH()
-{
-  set_disp_add_pin(PIN_CS, HIGH);
-}
-
-void CS_LOW()
-{
-  set_disp_add_pin(PIN_CS, LOW);
-}
-
-bool init_spi_bus(uint max_buf_size)
+bool spi_init(uint32_t max_buf_size)
 {
   if (spi_fd > -1)
     return true;
@@ -128,7 +89,7 @@ bool init_spi_bus(uint max_buf_size)
     return false;
   }
 
-  if (ioctl(spi_fd, SPI_IOC_WR_MAX_SPEED_HZ, &SPI_MAX_SPEED) < 0)
+  if (ioctl(spi_fd, SPI_IOC_WR_MAX_SPEED_HZ, &SPI_FREQ) < 0)
   {
     fprintf(stderr, "Помилка встановлення MAX_SPEED_HZ\n");
     return false;
@@ -159,7 +120,7 @@ bool init_spi_bus(uint max_buf_size)
   // активним (0) всередині кожного ioctl, тому ми не встановлюємо transfers[i].cs_change.
   for (size_t i = 0; i < _max_chunks_num; ++i)
   {
-    _transfers[i].speed_hz = SPI_MAX_SPEED;
+    _transfers[i].speed_hz = SPI_FREQ;
     _transfers[i].bits_per_word = SPI_BIT_PER_WORD;
     // Інші поля 0 завдяки calloc.
   }
@@ -168,7 +129,7 @@ bool init_spi_bus(uint max_buf_size)
   return true;
 }
 
-void deinit_spi_bus()
+void spi_deinit()
 {
   if (spi_fd > 0)
     close(spi_fd);
@@ -189,7 +150,7 @@ void spi_transfer_message(const uint8_t* tx_buf, size_t len)
 
   size_t total_chunks = (len + SPI_CHUNK_SIZE - 1) / SPI_CHUNK_SIZE;
 
-  if (_max_chunks_num < total_chunks)
+  if (total_chunks > _max_chunks_num)
   {
     fprintf(stderr, "Завеликий розмір даних для буфера SPI transfers\n");
     return;
@@ -238,44 +199,6 @@ void writeC8D16D16(uint8_t c, uint16_t d1, uint16_t d2)
   writeCommand(c);
   write16(d1);
   write16(d2);
-}
-
-void write_addr_window(int16_t x, int16_t y, uint16_t w, uint16_t h)
-{
-  writeC8D16D16(ST7796_CASET, x, w - 1);
-
-  writeC8D16D16(ST7796_RASET, y, h - 1);
-
-  writeCommand(ST7796_RAMWR);  // write to RAM
-}
-
-void set_addr_window(int16_t x0, int16_t y0, uint16_t w, uint16_t h)
-{
-  DC_HIGH();
-
-  write_addr_window(x0, y0, w, h);
-
-  // CS_HIGH();
-}
-
-void push_img_buff(const uint8_t* img_buff, size_t len)
-{
-  CS_LOW();
-
-  set_addr_window(0, 0, 320, 480);
-
-  DC_HIGH();
-
-  spi_transfer_message(img_buff, len);
-
-  CS_HIGH();
-}
-
-void invert_display(bool state)
-{
-  beginWrite();
-  writeCommand((state) ? ST7796_INVON : ST7796_INVOFF);
-  endWrite();
 }
 
 void POLL(uint32_t len)
@@ -352,6 +275,17 @@ void WRITE8BIT(uint8_t d)
 {
   _buffer[_data_buf_index] = d;
   ++_data_buf_index;
+}
+
+void writeC8D8(uint8_t c, uint8_t d)
+{
+  DC_LOW();
+  _buffer[0] = c;
+  POLL(7);
+
+  DC_HIGH();
+  _buffer[0] = d;
+  POLL(7);
 }
 
 void batch_operations(const uint8_t* operations, size_t len)

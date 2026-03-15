@@ -1,18 +1,19 @@
-#include "displ_add_line_ctrl.h"
+#pragma GCC optimize("O3")
+#include "add_pins.h"
 
 #include <fcntl.h>
 #include <linux/gpio.h>
 #include <sys/ioctl.h>
+#include <unistd.h>
 
-#include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <unordered_map>
 
-const char* STR_CHIP_PATH = "/dev/gpiochip0";
 const char* STR_CONS_LBL = "display_add_pin";
 
-const std::unordered_map<DisplayPin, uint> PIN_MAP{
+const std::unordered_map<AdditionalPin, uint> PIN_MAP{
     {PIN_RST, 0},
     {PIN_BLK, 1},
     {PIN_DC, 2},
@@ -25,9 +26,9 @@ int _line_fd = -1;
 struct gpiohandle_request _request;
 struct gpiohandle_data _gpio_data;
 
-bool init_disp_add_pins()
+bool add_pin_init()
 {
-  _chip_fd = open(STR_CHIP_PATH, O_RDONLY);
+  _chip_fd = open(STR_GPIO_PATH, O_RDONLY);
   if (_chip_fd < 0)
   {
     fprintf(stderr, "Помилка відкриття gpiochip\n");
@@ -68,7 +69,7 @@ bool init_disp_add_pins()
   return true;
 }
 
-void deinit_disp_add_pins()
+void add_pin_deinit()
 {
   if (_line_fd > 0)
     close(_line_fd);
@@ -79,7 +80,7 @@ void deinit_disp_add_pins()
   printf("Додаткові піни дисплея деініціалізовано\n");
 }
 
-void set_disp_add_pin(DisplayPin pin, u_char state)
+void add_pin_set(AdditionalPin pin, u_char state)
 {
   _gpio_data.values[PIN_MAP.at(pin)] = state;
 
@@ -87,4 +88,24 @@ void set_disp_add_pin(DisplayPin pin, u_char state)
   {
     fprintf(stderr, "Помилка встановлення встановлення піна [%u] в стан [%u]\n", pin, state);
   }
+}
+
+void DC_HIGH()
+{
+  add_pin_set(PIN_DC, HIGH);
+}
+
+void DC_LOW()
+{
+  add_pin_set(PIN_DC, LOW);
+}
+
+void CS_HIGH()
+{
+  add_pin_set(PIN_CS, HIGH);
+}
+
+void CS_LOW()
+{
+  add_pin_set(PIN_CS, LOW);
 }

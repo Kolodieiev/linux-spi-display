@@ -1,9 +1,8 @@
 #pragma once
-
-#include <stdlib.h>
-#include <unistd.h>
+#pragma GCC optimize("O3")
 
 #include <cstdint>
+#include "thread_helper.h"
 
 typedef enum
 {
@@ -22,11 +21,14 @@ typedef enum
   DELAY,
 } spi_operation_type_t;
 
-bool init_spi_bus(uint max_buf_size);
-void deinit_spi_bus();
+bool spi_init(uint32_t max_buf_size);
+void spi_deinit();
 void spi_transfer_message(const uint8_t* tx_buf, size_t len);
+
 void batch_operations(const uint8_t* operations, size_t len);
 
-void push_img_buff(const uint8_t* img_buff, size_t len);
-
-void invert_display(bool state);
+void writeC8D16D16(uint8_t c, uint16_t d1, uint16_t d2);
+void writeC8D8(uint8_t c, uint8_t d);
+void writeCommand(uint8_t c);
+void beginWrite();
+void endWrite();
